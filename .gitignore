@@ -1,0 +1,8 @@
+# 运行产物与业务数据不进仓
+audio/
+*.mp3
+*.log
+web/data/*.json
+!web/data/index.json
+__pycache__/
+.DS_Store
