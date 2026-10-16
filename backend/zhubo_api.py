@@ -81,11 +81,13 @@ def zb_texts(project):
         n = zb_norm(x)
         if len(n) >= 2 and n not in seen: seen.add(n); out.append(n)
     return out
-def zb_pregen_start(project, voice):
+def zb_pregen_start(project, voice, texts=None):
     key = project + "|" + voice
     st = _pregen.get(key)
     if st and st.get("running"): return st
-    texts = zb_texts(project)
+    # 页面会把改过之后的台词（含自己加的、AI 现场补的）一起传上来；没传就按生成稿
+    if texts: texts = list(dict.fromkeys(n for n in (zb_norm(x) for x in texts[:400] if isinstance(x, str)) if len(n) >= 2))
+    else: texts = zb_texts(project)
     st = {"running": True, "total": len(texts), "done": sum(1 for x in zb_have(voice, texts) if x), "failed": 0, "started": time.strftime("%H:%M")}
     _pregen[key] = st
     def work(q):
@@ -105,6 +107,37 @@ def zb_pregen_start(project, voice):
     threading.Thread(target=watch, daemon=True).start()
     return st
 
+# ===== 新增：自己改的台词 / 快捷键 / 自填资料，AI 现场补一段（这几段要合进 auth_server.py）=====
+ZB_WORK = "/opt/ai-office/zhubo/data"   # 不在网站目录下：改动和自填资料只走接口读写
+def zb_mine_path(project):
+    pj = re.sub(r"[^\w-]", "", str(project or ""))
+    if not re.match(r"^[\w-]{2,40}$", pj): raise ValueError("项目不对")
+    return os.path.join(ZB_WORK, pj + "_mine.json")
+def zb_mine_get(project):
+    f = zb_mine_path(project)
+    if not os.path.isfile(f): return {}
+    return json.load(open(f, encoding="utf-8"))
+def zb_mine_put(project, data, who=""):
+    if not isinstance(data, dict): raise ValueError("格式不对")
+    raw = json.dumps(data, ensure_ascii=False)
+    if len(raw) > 2 * 1024 * 1024: raise ValueError("内容太多了")
+    f = zb_mine_path(project); os.makedirs(ZB_WORK, exist_ok=True)
+    data["saved_at"] = time.strftime("%Y-%m-%d %H:%M:%S"); data["saved_by"] = who
+    tmp = f + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fp: json.dump(data, fp, ensure_ascii=False)
+    os.replace(tmp, f)
+    return {"ok": True, "saved_at": data["saved_at"]}
+def zb_gen(req):
+    # 单段生成交给 gen.py --one（和整场生成同一套技能、资料与口吻），这里只转一手
+    if not isinstance(req, dict) or not re.match(r"^[\w-]{2,40}$", str(req.get("project") or "")): raise ValueError("参数不对")
+    if req.get("kind") == "faq" and len(str(req.get("ask") or "").strip()) < 2: raise ValueError("先写观众问了什么")
+    r = subprocess.run(["python3", "/opt/ai-office/zhubo/gen.py", "--one"], input=json.dumps(req, ensure_ascii=False),
+                       capture_output=True, text=True, timeout=240, cwd="/opt/ai-office/zhubo")
+    if r.returncode != 0: raise RuntimeError((r.stderr.strip().splitlines() or ["没写出来"])[-1][:120])
+    out = json.loads(r.stdout.strip().splitlines()[-1])
+    if not str(out.get("text") or out.get("a") or "").strip(): raise RuntimeError("没写出来，再点一次")
+    return out
+
 
 # ===== 路由（auth_server.py 中 Handler.do_GET / do_POST 的 zhubo 分支，原样摘录）=====
 #         if p == "/api/zhubo/pregen":
@@ -112,6 +145,11 @@ def zb_pregen_start(project, voice):
 #             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
 #             st = _pregen.get((q.get("project") or [""])[0] + "|" + (q.get("voice") or [""])[0])
 #             return self._send(200, st or {"running": False})
+#         if p == "/api/zhubo/mine":   # 新增
+#             if not self._user(): return self._send(401, {"error": "未登录"})
+#             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+#             try: return self._send(200, {"mine": zb_mine_get((q.get("project") or [""])[0])})
+#             except ValueError as e: return self._send(422, {"error": str(e)})
 #         if p == "/api/zhubo/voices":
 #             if not self._user(): return self._send(401, {"error": "未登录"})
 #             try: return self._send(200, {"voices": zb_voices(), "default": "4188dc46e3fd"})
@@ -136,8 +174,18 @@ def zb_pregen_start(project, voice):
 #             if not self._user(): return self._send(401, {"error": "未登录"})
 #             v = str(body.get("voice") or ""); pj = str(body.get("project") or "")
 #             if not re.match(r"^[0-9a-f]{12}$", v) or not re.match(r"^[\w-]{2,40}$", pj): return self._send(422, {"error": "参数不对"})
-#             try: return self._send(200, zb_pregen_start(pj, v))
+#             try: return self._send(200, zb_pregen_start(pj, v, body.get("texts") if isinstance(body.get("texts"), list) else None))
 #             except FileNotFoundError: return self._send(404, {"error": "这个项目还没有话术"})
+#         if p == "/api/zhubo/mine":   # 新增：存自己改的台词、快捷键、自填资料
+#             u = self._user()
+#             if not u: return self._send(401, {"error": "未登录"})
+#             try: return self._send(200, zb_mine_put(body.get("project"), body.get("mine"), str(u.get("name") if isinstance(u, dict) else u)[:40]))
+#             except ValueError as e: return self._send(422, {"error": str(e)})
+#         if p == "/api/zhubo/gen":    # 新增：AI 现场补一段（再写一版 / 回答评论区问题）
+#             if not self._user(): return self._send(401, {"error": "未登录"})
+#             try: return self._send(200, zb_gen(body))
+#             except ValueError as e: return self._send(422, {"error": str(e)})
+#             except Exception as e: return self._send(502, {"error": str(e)[:120] or "没写出来"})
 #         if p == "/api/zhubo/tts":
 #             if not self._user(): return self._send(401, {"error": "未登录"})
 #             try: return self._send(200, zb_tts(body.get("text"), str(body.get("voice") or "")))
