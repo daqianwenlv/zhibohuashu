@@ -13,13 +13,16 @@
 | `web/index.html` | `/var/www/y1-home/workspace/zhubo/index.html` | 页面（单文件） |
 | `web/data/index.json` | `/var/www/y1-home/workspace/zhubo/data/index.json` | 项目清单 |
 | `backend/gen.py` | `/opt/ai-office/zhubo/gen.py` | 话术生成脚本：`python3 gen.py --project <项目id>`，输出 `data/<项目id>.json` |
-| `backend/zhubo_api.py` | 摘自 `/opt/ai-office/auth_server.py` | 配音 / 预生成 / 录音上传接口（只读参考，线上跑在 auth_server.py 里，端口 5080） |
+| `backend/gen_lib.py` | `/opt/ai-office/zhubo/gen_lib.py` | 按场景生成话术库，合并进 `<项目>.lib.json`（手改过的不覆盖）；工作台「生成话术」按钮调用 |
+| `backend/lib.py` | `/opt/ai-office/zhubo/lib.py` | 话术库公共定义：场景表、库读写、合并 |
+| `backend/ingest.py` | `/opt/ai-office/zhubo/ingest.py` | 景区资料上传解析（文件 / 飞书 / 网页 → 文字） |
+| `backend/zhubo_api.py` | 摘自 `/opt/ai-office/auth_server.py` | 全部 /api/zhubo/* 接口（配音、话术库编辑、资料上传、主播声音等）（只读参考，线上跑在 auth_server.py 里，端口 5080） |
 | `skill/` | `/var/www/y1-home/workspace/skills/zhibo-huashu/` | 「直播话术」技能，gen.py 生成时读它 |
 
 ## 不在仓里的
 
-- 生成好的话术 `data/<项目>.json`、配音 `audio/*.mp3`：运行产物
-- 商品、知识库等原始资料（`/opt/ai-office/zhubo/data/`）：业务数据
+- 生成好的话术和话术库 `data/<项目>.json` / `.lib.json`、主播配置 `data/hosts.json`、配音 `audio/*.mp3`：运行产物
+- 商品、知识库、上传的景区资料（`/opt/ai-office/zhubo/data/`、`uploads/`）：业务数据
 - `auth_server.py` 全文：办公室共用服务，含其他应用与内部地址
 
 本仓是公开仓，只放代码和技能文本。
